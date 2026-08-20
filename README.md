@@ -113,6 +113,10 @@ Required repository secrets (Settings → Secrets and variables → Actions):
 The server needs Docker with the Compose plugin. The database is kept in `./data` next to the
 compose file on the server, so it survives redeploys.
 
+If the SSH account is not in the `docker` group, the deploy falls back to `sudo`, using
+`SUDO_PASSWORD` or the SSH password. After the container starts, the job prints the bot log and
+fails if the container is not running.
+
 ## Notes
 
 - The owner has to press `/start` once: Telegram does not let bots message people first.
