@@ -1,0 +1,97 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile check
+        run: python -m compileall -q .
+
+      - name: Run bot scenarios
+        run: python tests/test_flow.py
+
+  deploy:
+    name: Deploy to VPS
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Until the secrets are set, the deploy reports itself skipped instead of failing.
+      - name: Check secrets
+        id: secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+        run: |
+          missing=""
+          for name in VPS_HOST SSH_USERNAME SSH_PASSWORD BOT_TOKEN ADMIN_IDS; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### Deploy skipped — missing secrets:$missing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Copy sources to the server
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "*.py,requirements.txt,Dockerfile,docker-compose.yml"
+          target: ${{ secrets.DEPLOY_PATH || '~/feedback-bot' }}
+          overwrite: true
+
+      - name: Rebuild and restart the container
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: BOT_TOKEN,ADMIN_IDS
+          script_stop: true
+          script: |
+            cd ${{ secrets.DEPLOY_PATH || '~/feedback-bot' }}
+            umask 077
+            cat > .env <<ENVFILE
+            BOT_TOKEN=$BOT_TOKEN
+            ADMIN_IDS=$ADMIN_IDS
+            DB_PATH=/data/feedback.db
+            RATE_LIMIT_PER_MINUTE=20
+            ENVFILE
+            docker compose up -d --build
+            docker image prune -f
+            sleep 5
+            docker compose ps
+            docker compose logs --tail 20
