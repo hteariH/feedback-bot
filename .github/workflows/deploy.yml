@@ -105,6 +105,15 @@ jobs:
 
             $DOCKER compose up -d --build
             $DOCKER image prune -f
-            sleep 5
+
+            # Give the bot time to reach Telegram, then prove it is actually up.
+            sleep 15
             $DOCKER compose ps
-            $DOCKER compose logs --tail 20
+            echo "----- bot log -----"
+            $DOCKER compose logs --tail 30 2>&1 || true
+            echo "-------------------"
+
+            if [ -z "$($DOCKER compose ps -q --status running)" ]; then
+              echo "the bot container is not running after deploy" >&2
+              exit 1
+            fi
