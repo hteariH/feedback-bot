@@ -74,12 +74,13 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD || secrets.SSH_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          envs: BOT_TOKEN,ADMIN_IDS
+          envs: BOT_TOKEN,ADMIN_IDS,SUDO_PASSWORD
           script_stop: true
           script: |
             cd ${{ secrets.DEPLOY_PATH || '~/feedback-bot' }}
@@ -90,8 +91,20 @@ jobs:
             DB_PATH=/data/feedback.db
             RATE_LIMIT_PER_MINUTE=20
             ENVFILE
-            docker compose up -d --build
-            docker image prune -f
+
+            # The SSH user may not be in the docker group; fall back to sudo with the same password.
+            if docker info >/dev/null 2>&1; then
+              DOCKER="docker"
+            elif echo "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1; then
+              DOCKER="sudo docker"
+              echo "note: docker needs sudo here; add the user to the docker group to skip it"
+            else
+              echo "no access to the docker daemon: user is not in the docker group and sudo failed" >&2
+              exit 1
+            fi
+
+            $DOCKER compose up -d --build
+            $DOCKER image prune -f
             sleep 5
-            docker compose ps
-            docker compose logs --tail 20
+            $DOCKER compose ps
+            $DOCKER compose logs --tail 20
